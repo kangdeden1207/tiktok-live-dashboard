@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="id" x-data="dashboard" x-init="init()">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Command — TikTok Shop Dashboard</title>
+
+  <!-- Tailwind (CDN / play-mode, cocok untuk dev cepat) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            void: '#07060A',
+            carbon: '#130F14',
+            panel: '#1A1419',
+            crimson: '#E1003C',
+            ember: '#FF3D57',
+            blood: '#4D0017',
+            bone: '#F3EEEE',
+            smoke: '#8C8693',
+            gold: '#FFC233',
+          },
+          fontFamily: {
+            display: ['Orbitron', 'sans-serif'],
+            body: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <!-- Socket.io client (disajikan otomatis oleh server socket.io) -->
+  <script src="/socket.io/socket.io.js"></script>
+
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+  <script src="/js/app.js"></script>
+
+  <style>
+    html { background: #07060A; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background:
+        radial-gradient(ellipse 1200px 600px at 50% -10%, rgba(225,0,60,0.18), transparent 60%),
+        linear-gradient(180deg, #0A0509 0%, #07060A 45%, #050406 100%);
+      color: #F3EEEE;
+      min-height: 100vh;
+    }
+
+    .font-display { letter-spacing: 0.04em; }
+
+    /* Scrollbar tipis bertema merah, supaya nyaman dipantau berjam-jam */
+    .scroll-thin::-webkit-scrollbar { width: 6px; }
+    .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+    .scroll-thin::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, #E1003C, #4D0017);
+      border-radius: 8px;
+    }
+
+    /* Live pulse dot */
+    .pulse-dot { position: relative; width: 9px; height: 9px; border-radius: 50%; background: #E1003C; }
+    .pulse-dot::after {
+      content: '';
+      position: absolute; inset: -6px;
+      border-radius: 50%;
+      border: 1px solid #E1003C;
+      animation: pulse-ring 1.8s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.6); opacity: 0.9; }
+      100% { transform: scale(2.1); opacity: 0; }
+    }
+
+    /* Signature element: scanline alert untuk notifikasi gift/purchase */
+    .alert-card { position: relative; overflow: hidden; }
+    .alert-card::before {
+      content: '';
+      position: absolute; top: 0; left: -100%;
+      width: 100%; height: 2px;
+      background: linear-gradient(90deg, transparent, #FF3D57, transparent);
+      animation: scan 1.6s ease-in-out infinite;
+    }
+    @keyframes scan {
+      0% { left: -100%; }
+      100% { left: 100%; }
+    }
+
+    @keyframes slide-in {
+      from { transform: translateX(110%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    .notif-enter { animation: slide-in 0.35s cubic-bezier(0.2, 0.7, 0.3, 1); }
+
+    .comment-hot {
+      border-left: 2px solid #E1003C;
+      background: linear-gradient(90deg, rgba(225,0,60,0.10), transparent 70%);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .pulse-dot::after, .alert-card::before, .notif-enter { animation: none !important; }
+    }
+  </style>
+</head>
+
+<body class="font-body antialiased">
+
+  <!-- ====== TOP BAR ====== -->
+  <header class="sticky top-0 z-40 border-b border-white/5 bg-void/80 backdrop-blur-md">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="pulse-dot" :class="connected ? '' : 'opacity-30'"></div>
+        <div>
+          <p class="text-[10px] uppercase tracking-[0.25em] text-smoke font-display">Live Command</p>
+          <h1 class="font-display font-bold text-sm sm:text-base text-bone leading-tight">
+            TikTok Shop Monitor
+          </h1>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <template x-if="!connected">
+          <div class="flex items-center gap-2">
+            <input
+              x-model="uniqueIdInput"
+              type="text"
+              placeholder="username TikTok host"
+              class="hidden sm:block w-44 bg-panel border border-white/10 rounded-lg px-3 py-2 text-xs text-bone placeholder-smoke focus:outline-none focus:ring-2 focus:ring-crimson/60"
+            />
+            <button
+              @click="startSession()"
+              class="px-4 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-crimson to-blood text-white shadow-lg shadow-crimson/20 hover:shadow-crimson/40 transition focus:outline-none focus:ring-2 focus:ring-ember"
+            >
+              ▶ Mulai Pantau
+            </button>
+          </div>
+        </template>
+        <template x-if="connected">
+          <button
+            @click="stopSession()"
+            class="px-4 py-2 rounded-lg text-xs font-semibold border border-crimson/40 text-ember hover:bg-crimson/10 transition focus:outline-none focus:ring-2 focus:ring-ember"
+          >
+            ■ Hentikan Sesi
+          </button>
+        </template>
+      </div>
+    </div>
+  </header>
+
+  <!-- ====== MAIN GRID ====== -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-5">
+
+    <!-- ---- LEFT: Comments & Filter ---- -->
+    <section class="bg-carbon/70 border border-white/5 rounded-2xl flex flex-col min-h-[480px] max-h-[78vh]">
+      <div class="p-4 border-b border-white/5">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-display text-xs uppercase tracking-[0.2em] text-smoke">Live Comments</h2>
+          <span class="text-[11px] font-mono text-smoke" x-text="comments.length + ' pesan'"></span>
+        </div>
+
+        <!-- Filter chips -->
+        <div class="flex flex-wrap items-center gap-2">
+          <template x-for="kw in filterKeywords" :key="kw">
+            <span class="group flex items-center gap-1 text-[11px] font-mono px-2.5 py-1 rounded-full bg-crimson/15 text-ember border border-crimson/30">
+              <span x-text="kw"></span>
+              <button @click="removeFilterKeyword(kw)" class="opacity-60 group-hover:opacity-100">✕</button>
+            </span>
+          </template>
+          <form @submit.prevent="addFilterKeyword()" class="flex items-center gap-1">
+            <input
+              x-model="newKeywordInput"
+              type="text"
+              placeholder="+ keyword"
+              class="w-24 bg-transparent border border-dashed border-white/15 rounded-full px-2.5 py-1 text-[11px] text-bone placeholder-smoke focus:outline-none focus:border-crimson/60"
+            />
+          </form>
+        </div>
+      </div>
+
+      <!-- Comment stream -->
+      <div class="flex-1 overflow-y-auto scroll-thin px-4 py-3 space-y-2" id="comment-list">
+        <template x-if="comments.length === 0">
+          <p class="text-smoke text-xs text-center py-10">Belum ada komentar. Tekan "Mulai Pantau" untuk mulai menangkap live room.</p>
+        </template>
+
+        <template x-for="c in comments" :key="c.id">
+          <div
+            class="rounded-lg px-3 py-2 text-sm"
+            :class="c.isHot ? 'comment-hot' : 'bg-white/[0.02]'"
+          >
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="font-mono text-[11px] text-ember/90" x-text="c.username"></span>
+              <span class="font-mono text-[10px] text-smoke" x-text="formatTime(c.timestamp)"></span>
+            </div>
+            <p class="text-bone/90 text-[13px] leading-snug" x-text="c.text"></p>
+            <template x-if="c.isHot">
+              <div class="mt-1 flex gap-1">
+                <template x-for="m in c.matchedKeywords" :key="m">
+                  <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-crimson/20 text-ember" x-text="m"></span>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </section>
+
+    <!-- ---- RIGHT: Stats + Product Pin ---- -->
+    <aside class="flex flex-col gap-4">
+
+      <!-- Stats card -->
+      <div class="bg-carbon/70 border border-white/5 rounded-2xl p-4">
+        <h2 class="font-display text-xs uppercase tracking-[0.2em] text-smoke mb-4">Live Stats</h2>
+        <div class="grid grid-cols-3 gap-3">
+          <div class="text-center">
+            <p class="text-[10px] uppercase text-smoke tracking-wide mb-1">Viewers</p>
+            <p class="font-mono font-bold text-xl text-bone" x-text="viewerCount.toLocaleString('id-ID')"></p>
+          </div>
+          <div class="text-center border-x border-white/5">
+            <p class="text-[10px] uppercase text-smoke tracking-wide mb-1">Likes</p>
+            <p class="font-mono font-bold text-xl text-ember" x-text="likeCount.toLocaleString('id-ID')"></p>
+          </div>
+          <div class="text-center">
+            <p class="text-[10px] uppercase text-smoke tracking-wide mb-1">Shares</p>
+            <p class="font-mono font-bold text-xl text-bone" x-text="shareCount.toLocaleString('id-ID')"></p>
+          </div>
+        </div>
+        <p class="text-[10px] text-smoke mt-3 font-mono" x-text="sessionStatusText"></p>
+      </div>
+
+      <!-- Product Pin panel -->
+      <div class="bg-carbon/70 border border-white/5 rounded-2xl p-4">
+        <h2 class="font-display text-xs uppercase tracking-[0.2em] text-smoke mb-3">
+          📌 Keranjang Kuning — Sedang Di-pin
+        </h2>
+
+        <template x-if="!pinnedProduct">
+          <p class="text-smoke text-xs py-4 text-center">Belum ada produk yang di-pin.</p>
+        </template>
+
+        <template x-if="pinnedProduct">
+          <div class="flex items-center gap-3 rounded-xl bg-gold/[0.08] border border-gold/25 p-3 mb-3">
+            <div class="text-2xl" x-text="pinnedProduct.image"></div>
+            <div class="flex-1">
+              <p class="text-sm font-semibold text-bone leading-tight" x-text="pinnedProduct.name"></p>
+              <p class="text-xs font-mono text-gold" x-text="formatPrice(pinnedProduct.price)"></p>
+            </div>
+            <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-gold/20 text-gold">PINNED</span>
+          </div>
+        </template>
+
+        <p class="text-[10px] uppercase text-smoke tracking-wide mb-2">Riwayat pin sebelumnya</p>
+        <div class="space-y-1.5 max-h-32 overflow-y-auto scroll-thin">
+          <template x-for="(p, idx) in pinnedHistory" :key="idx">
+            <div class="flex items-center gap-2 text-xs text-smoke">
+              <span x-text="p.image"></span>
+              <span class="flex-1 truncate" x-text="p.name"></span>
+              <span class="font-mono" x-text="formatPrice(p.price)"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- ====== FLOATING NOTIFICATIONS (Gift / Purchase) ====== -->
+  <div class="fixed top-20 right-4 z-50 w-72 space-y-2.5">
+    <template x-for="n in notifications" :key="n.id">
+      <div
+        class="alert-card notif-enter rounded-xl p-3 border backdrop-blur-md shadow-2xl"
+        :class="n.type === 'purchase'
+          ? 'bg-gold/10 border-gold/40 shadow-gold/10'
+          : 'bg-crimson/10 border-crimson/40 shadow-crimson/20'"
+      >
+        <div class="flex items-center gap-2.5">
+          <div class="text-xl" x-text="n.icon"></div>
+          <div class="flex-1 min-w-0">
+            <p class="text-xs font-semibold text-bone truncate" x-text="n.title"></p>
+            <p class="text-[11px] text-smoke truncate" x-text="n.subtitle"></p>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+</body>
+</html>

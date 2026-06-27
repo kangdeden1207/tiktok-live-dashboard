@@ -1,0 +1,24 @@
+{
+  "name": "tiktok-live-dashboard",
+  "version": "1.0.0",
+  "description": "Real-time dashboard untuk memantau & mengoptimalkan TikTok Live Jualan (Shop/Affiliate)",
+  "main": "server/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "nodemon server/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "dotenv": "^16.4.5",
+    "ioredis": "^5.4.1",
+    "@supabase/supabase-js": "^2.45.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  },
+  "optionalDependencies": {
+    "tiktok-live-connector": "^1.2.13"
+  }
+}
