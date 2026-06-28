@@ -84,6 +84,10 @@ class TikTokConnector extends EventEmitter {
     this.connected = false;
     this._timers.forEach((t) => clearInterval(t));
     this._timers = [];
+    if (this._liveConnection) {
+      this._liveConnection.disconnect().catch(() => {});
+      this._liveConnection = null;
+    }
     this.emit('streamEnd', { roomId: this.roomId });
   }
 
@@ -198,71 +202,109 @@ class TikTokConnector extends EventEmitter {
     this.emit('productPin', { product, pinnedAt: Date.now() });
   }
 
-  // ---- Mode live (placeholder, siap dikembangkan) ----
+  // ---- Mode live: koneksi TikTok asli via tiktok-live-connector + Euler Stream ----
   //
-  // Untuk pakai koneksi live TikTok asli:
-  //   1. npm install tiktok-live-connector
-  //   2. set TIKTOK_MODE=live di .env
-  //   3. isi logic di bawah ini (sudah disiapkan strukturnya)
+  // Butuh:
+  //   1. npm install tiktok-live-connector (sudah ada di package.json)
+  //   2. EULER_SIGN_API_KEY di .env / Railway Variables (dari eulerstream.com)
+  //   3. Username yang dipantau HARUS sedang live saat ini
   //
-  // Contoh wiring (di-nonaktifkan secara default karena butuh
-  // package tambahan & koneksi keluar ke server TikTok):
-  //
-  // async _connectRealTikTok(uniqueId) {
-  //   const { WebcastPushConnection } = require('tiktok-live-connector');
-  //   const tiktokLive = new WebcastPushConnection(uniqueId);
-  //
-  //   const state = await tiktokLive.connect();
-  //   this.connected = true;
-  //   this.roomId = state.roomId;
-  //   this.emit('connected', { roomId: state.roomId, uniqueId, mode: 'live' });
-  //
-  //   tiktokLive.on('chat', (data) => {
-  //     this.emit('comment', {
-  //       id: data.msgId,
-  //       username: data.uniqueId,
-  //       text: data.comment,
-  //       timestamp: Date.now(),
-  //     });
-  //   });
-  //
-  //   tiktokLive.on('gift', (data) => {
-  //     this.emit('gift', {
-  //       id: `${data.msgId}`,
-  //       username: data.uniqueId,
-  //       gift: { name: data.giftName, coinValue: data.diamondCount, icon: '🎁' },
-  //       repeatCount: data.repeatCount,
-  //       totalCoinValue: data.diamondCount * data.repeatCount,
-  //       timestamp: Date.now(),
-  //     });
-  //   });
-  //
-  //   tiktokLive.on('like', (data) => {
-  //     this.stats.likeCount = data.totalLikeCount;
-  //     this.emit('like', {
-  //       username: data.uniqueId,
-  //       increment: data.likeCount,
-  //       totalLikeCount: data.totalLikeCount,
-  //     });
-  //   });
-  //
-  //   tiktokLive.on('roomUser', (data) => {
-  //     this.emit('viewerCount', { count: data.viewerCount });
-  //   });
-  //
-  //   tiktokLive.on('share', (data) => {
-  //     this.emit('share', { username: data.uniqueId, totalShareCount: data.totalShareCount });
-  //   });
-  //
-  //   tiktokLive.on('streamEnd', () => this.disconnect());
-  // }
+  // Pakai dynamic import() karena tiktok-live-connector adalah paket ESM —
+  // ini tetap aman dipanggil dari project CommonJS seperti project kita.
   async _connectRealTikTok(uniqueId) {
-    console.warn(
-      '⚠️  Mode "live" belum diaktifkan. Install `tiktok-live-connector` lalu ' +
-      'lengkapi implementasi di server/services/tiktokConnector.js (_connectRealTikTok). ' +
-      'Fallback ke mode simulasi untuk sekarang.'
-    );
-    return this._connectSimulation(uniqueId);
+    const { TikTokLiveConnection, WebcastEvent, ControlEvent } = await import('tiktok-live-connector');
+
+    const connection = new TikTokLiveConnection(uniqueId, {
+      signApiKey: process.env.EULER_SIGN_API_KEY,
+      enableExtendedGiftInfo: true, // biar dapat info harga/diamond gift
+    });
+
+    this._liveConnection = connection;
+
+    let state;
+    try {
+      state = await connection.connect();
+    } catch (err) {
+      this.connected = false;
+      this._liveConnection = null;
+      const isOffline = /offline|not.*live|UserOfflineError/i.test(err?.name + ' ' + err?.message);
+      throw new Error(
+        isOffline
+          ? `@${uniqueId} sedang tidak live sekarang. Pastikan host sudah mulai live TikTok dulu, baru tekan "Mulai Pantau".`
+          : `Gagal connect ke TikTok: ${err.message}`
+      );
+    }
+
+    this.connected = true;
+    this.roomId = state.roomId;
+    this.emit('connected', { roomId: state.roomId, uniqueId, mode: 'live' });
+
+    connection.on(ControlEvent.ERROR, ({ info, exception }) => {
+      console.error('TikTok live error:', info, exception?.message || '');
+    });
+
+    connection.on(ControlEvent.DISCONNECTED, ({ code, reason } = {}) => {
+      console.log('TikTok live disconnected', code, reason || '');
+      this.connected = false;
+      this.emit('streamEnd', { roomId: this.roomId });
+    });
+
+    connection.on(WebcastEvent.CHAT, (data) => {
+      this.emit('comment', {
+        id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        username: data.user?.uniqueId || data.user?.nickname || 'unknown',
+        text: data.comment || '',
+        timestamp: Date.now(),
+      });
+    });
+
+    connection.on(WebcastEvent.GIFT, (data) => {
+      // Gift streak (giftType 1) emit event berulang sampai selesai —
+      // kita tunggu sampai repeatEnd biar gak spam notifikasi tiap detik.
+      if (data.giftDetails?.giftType === 1 && !data.repeatEnd) return;
+
+      const coinValue = data.extendedGiftInfo?.diamond_count || 0;
+      const repeatCount = data.repeatCount || 1;
+
+      this.emit('gift', {
+        id: `gift_${data.msgId || Date.now()}`,
+        username: data.user?.uniqueId || 'unknown',
+        gift: {
+          name: data.giftDetails?.giftName || 'Gift',
+          coinValue,
+          icon: '🎁',
+        },
+        repeatCount,
+        totalCoinValue: coinValue * repeatCount,
+        timestamp: Date.now(),
+      });
+    });
+
+    connection.on(WebcastEvent.LIKE, (data) => {
+      this.stats.likeCount = data.totalLikeCount ?? this.stats.likeCount;
+      this.emit('like', {
+        username: data.user?.uniqueId || 'unknown',
+        increment: data.likeCount || 0,
+        totalLikeCount: this.stats.likeCount,
+      });
+    });
+
+    connection.on(WebcastEvent.SHARE, (data) => {
+      this.stats.shareCount += 1;
+      this.emit('share', {
+        username: data.user?.uniqueId || 'unknown',
+        totalShareCount: this.stats.shareCount,
+      });
+    });
+
+    connection.on(WebcastEvent.ROOM_USER, (data) => {
+      this.stats.viewerCount = data.viewerCount ?? this.stats.viewerCount;
+      this.emit('viewerCount', { count: this.stats.viewerCount });
+    });
+
+    connection.on(WebcastEvent.STREAM_END, () => {
+      this.disconnect();
+    });
   }
 }
 

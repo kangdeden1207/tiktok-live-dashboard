@@ -127,18 +127,25 @@
 
       <div class="flex items-center gap-2">
         <template x-if="!connected">
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-1.5">
+            <select
+              x-model="connectionMode"
+              class="bg-panel border border-white/10 rounded-lg px-1.5 py-2 text-[11px] text-bone focus:outline-none focus:ring-2 focus:ring-crimson/60"
+            >
+              <option value="simulation">🟢 Sim</option>
+              <option value="live">🔴 Live</option>
+            </select>
             <input
               x-model="uniqueIdInput"
               type="text"
-              placeholder="username TikTok host"
-              class="hidden sm:block w-44 bg-panel border border-white/10 rounded-lg px-3 py-2 text-xs text-bone placeholder-smoke focus:outline-none focus:ring-2 focus:ring-crimson/60"
+              placeholder="username"
+              class="w-20 sm:w-40 bg-panel border border-white/10 rounded-lg px-2 py-2 text-[11px] text-bone placeholder-smoke focus:outline-none focus:ring-2 focus:ring-crimson/60"
             />
             <button
               @click="startSession()"
-              class="px-4 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-crimson to-blood text-white shadow-lg shadow-crimson/20 hover:shadow-crimson/40 transition focus:outline-none focus:ring-2 focus:ring-ember"
+              class="px-3 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-crimson to-blood text-white shadow-lg shadow-crimson/20 hover:shadow-crimson/40 transition focus:outline-none focus:ring-2 focus:ring-ember whitespace-nowrap"
             >
-              ▶ Mulai Pantau
+              ▶ Mulai
             </button>
           </div>
         </template>

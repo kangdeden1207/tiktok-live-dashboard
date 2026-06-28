@@ -8,6 +8,7 @@ document.addEventListener('alpine:init', () => {
     socket: null,
     connected: false,
     uniqueIdInput: '',
+    connectionMode: 'simulation',
     sessionStatusText: 'Belum ada sesi aktif.',
 
     // ---- Stats ----
@@ -121,9 +122,13 @@ document.addEventListener('alpine:init', () => {
 
     // ---- Actions: session control ----
     startSession() {
+      if (this.connectionMode === 'live' && !this.uniqueIdInput.trim()) {
+        this.sessionStatusText = 'Isi username TikTok dulu buat mode Live.';
+        return;
+      }
       this.socket.emit('session:start', {
         uniqueId: this.uniqueIdInput || 'demo_user',
-        mode: 'simulation', // ganti ke 'live' kalau tiktok-live-connector sudah dipasang
+        mode: this.connectionMode,
       });
     },
 

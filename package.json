@@ -13,12 +13,10 @@
     "socket.io": "^4.7.5",
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",
-    "@supabase/supabase-js": "^2.45.4"
+    "@supabase/supabase-js": "^2.45.4",
+    "tiktok-live-connector": "^2.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"
-  },
-  "optionalDependencies": {
-    "tiktok-live-connector": "^1.2.13"
   }
 }
