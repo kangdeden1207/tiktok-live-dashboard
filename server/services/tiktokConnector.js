@@ -8,13 +8,13 @@
 // share, viewer count, product pin) supaya UI/dashboard bisa dikembangkan
 // tanpa harus live di TikTok dulu.
 //
-// MODE "live": connect langsung ke WebSocket gateway Euler Stream
-// (wss://ws.eulerstream.com) pakai API key dari eulerstream.com. Struktur
+// MODE "live": tinggal pasang package `tiktok-live-connector` (sudah ada di
+// optionalDependencies package.json) lalu npm install. Lihat blok
+// `_connectRealTikTok()` di bagian bawah untuk contoh wiring-nya — struktur
 // event yang di-emit SAMA dengan mode simulasi, jadi frontend tidak perlu
 // diubah sama sekali.
 
 const EventEmitter = require('events');
-const WebSocket = require('ws');
 
 const SAMPLE_USERNAMES = [
   'sasa_cantik', 'budi.shop', 'rara_official', 'dimas99', 'lily_kece',
@@ -84,14 +84,6 @@ class TikTokConnector extends EventEmitter {
     this.connected = false;
     this._timers.forEach((t) => clearInterval(t));
     this._timers = [];
-    if (this._liveSocket) {
-      try {
-        this._liveSocket.close(1000);
-      } catch {
-        // diam-diam, koneksi mungkin sudah tertutup
-      }
-      this._liveSocket = null;
-    }
     this.emit('streamEnd', { roomId: this.roomId });
   }
 
@@ -206,150 +198,71 @@ class TikTokConnector extends EventEmitter {
     this.emit('productPin', { product, pinnedAt: Date.now() });
   }
 
-  // ---- Mode live: koneksi TikTok asli via WebSocket gateway Euler Stream ----
+  // ---- Mode live (placeholder, siap dikembangkan) ----
   //
-  // Kita connect LANGSUNG ke wss://ws.eulerstream.com (bukan lewat library
-  // tiktok-live-connector lagi) — ini fitur "WebSocket Server" Euler Stream
-  // yang sudah termasuk di plan Community (gratis), beda dari endpoint sign
-  // request yang butuh plan Business. Detail: eulerstream.com/websockets
+  // Untuk pakai koneksi live TikTok asli:
+  //   1. npm install tiktok-live-connector
+  //   2. set TIKTOK_MODE=live di .env
+  //   3. isi logic di bawah ini (sudah disiapkan strukturnya)
   //
-  // Butuh:
-  //   1. EULER_SIGN_API_KEY di .env / Railway Variables (dari eulerstream.com)
-  //   2. Username yang dipantau HARUS sedang live saat ini
+  // Contoh wiring (di-nonaktifkan secara default karena butuh
+  // package tambahan & koneksi keluar ke server TikTok):
+  //
+  // async _connectRealTikTok(uniqueId) {
+  //   const { WebcastPushConnection } = require('tiktok-live-connector');
+  //   const tiktokLive = new WebcastPushConnection(uniqueId);
+  //
+  //   const state = await tiktokLive.connect();
+  //   this.connected = true;
+  //   this.roomId = state.roomId;
+  //   this.emit('connected', { roomId: state.roomId, uniqueId, mode: 'live' });
+  //
+  //   tiktokLive.on('chat', (data) => {
+  //     this.emit('comment', {
+  //       id: data.msgId,
+  //       username: data.uniqueId,
+  //       text: data.comment,
+  //       timestamp: Date.now(),
+  //     });
+  //   });
+  //
+  //   tiktokLive.on('gift', (data) => {
+  //     this.emit('gift', {
+  //       id: `${data.msgId}`,
+  //       username: data.uniqueId,
+  //       gift: { name: data.giftName, coinValue: data.diamondCount, icon: '🎁' },
+  //       repeatCount: data.repeatCount,
+  //       totalCoinValue: data.diamondCount * data.repeatCount,
+  //       timestamp: Date.now(),
+  //     });
+  //   });
+  //
+  //   tiktokLive.on('like', (data) => {
+  //     this.stats.likeCount = data.totalLikeCount;
+  //     this.emit('like', {
+  //       username: data.uniqueId,
+  //       increment: data.likeCount,
+  //       totalLikeCount: data.totalLikeCount,
+  //     });
+  //   });
+  //
+  //   tiktokLive.on('roomUser', (data) => {
+  //     this.emit('viewerCount', { count: data.viewerCount });
+  //   });
+  //
+  //   tiktokLive.on('share', (data) => {
+  //     this.emit('share', { username: data.uniqueId, totalShareCount: data.totalShareCount });
+  //   });
+  //
+  //   tiktokLive.on('streamEnd', () => this.disconnect());
+  // }
   async _connectRealTikTok(uniqueId) {
-    return new Promise((resolve, reject) => {
-      const apiKey = process.env.EULER_SIGN_API_KEY;
-      if (!apiKey) {
-        reject(new Error('EULER_SIGN_API_KEY belum diset di Variables Railway.'));
-        return;
-      }
-
-      const cleanId = uniqueId.replace(/^@/, '').trim();
-      const wsUrl = `wss://ws.eulerstream.com?uniqueId=${encodeURIComponent(cleanId)}&apiKey=${encodeURIComponent(apiKey)}`;
-      const ws = new WebSocket(wsUrl);
-      this._liveSocket = ws;
-
-      let settled = false;
-
-      ws.on('open', () => {
-        this.connected = true;
-        this.roomId = `live_${cleanId}`;
-        this.emit('connected', { roomId: this.roomId, uniqueId: cleanId, mode: 'live' });
-        if (!settled) {
-          settled = true;
-          resolve({ roomId: this.roomId });
-        }
-      });
-
-      ws.on('message', (raw) => {
-        let payload;
-        try {
-          payload = JSON.parse(raw.toString());
-        } catch {
-          return;
-        }
-        const messages = payload?.messages || (payload?.type ? [payload] : []);
-        messages.forEach((msg) => this._handleEulerMessage(msg));
-      });
-
-      ws.on('close', (code, reasonBuf) => {
-        this.connected = false;
-        this._liveSocket = null;
-        const reason = reasonBuf ? reasonBuf.toString() : '';
-        if (!settled) {
-          settled = true;
-          reject(new Error(this._describeEulerCloseCode(code, cleanId, reason)));
-          return;
-        }
-        console.log('TikTok live ws closed:', code, reason);
-        this.emit('streamEnd', { roomId: this.roomId });
-      });
-
-      ws.on('error', (err) => {
-        console.error('TikTok live ws error:', err.message);
-        if (!settled) {
-          settled = true;
-          reject(new Error(`Gagal connect WebSocket: ${err.message}`));
-        }
-      });
-    });
-  }
-
-  // Terjemahan kode penutupan WebSocket Euler Stream ke pesan yang dimengerti
-  _describeEulerCloseCode(code, uniqueId, reason) {
-    const map = {
-      4404: `@${uniqueId} sedang tidak live sekarang. Pastikan host sudah mulai live, baru tekan "Mulai Pantau".`,
-      4400: `Username "${uniqueId}" gak valid.`,
-      4401: 'API key Euler Stream gak valid. Cek lagi EULER_SIGN_API_KEY di Railway Variables.',
-      4403: 'API key gak punya izin akses ke username ini.',
-      4429: 'Terlalu banyak koneksi atau connect terlalu cepat. Tunggu sebentar lalu coba lagi.',
-      4555: 'Koneksi sudah lewat batas 8 jam, otomatis ditutup.',
-      4556: 'Gagal fetch data webcast dari TikTok.',
-      4557: 'Gagal fetch room info dari TikTok.',
-      4500: 'TikTok menutup koneksi secara tidak terduga.',
-      4005: 'Live stream sudah berakhir.',
-      4006: 'Tidak ada aktivitas dari room, koneksi otomatis ditutup.',
-    };
-    return map[code] || `Gagal connect ke TikTok (code ${code})${reason ? ': ' + reason : ''}`;
-  }
-
-  // Pecah satu event JSON dari Euler Stream jadi event internal kita
-  _handleEulerMessage(msg) {
-    if (!msg || !msg.type) return;
-
-    switch (msg.type) {
-      case 'chat':
-        this.emit('comment', {
-          id: `c_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-          username: msg.user?.uniqueId || msg.user?.nickname || 'unknown',
-          text: msg.comment || '',
-          timestamp: Date.now(),
-        });
-        break;
-
-      case 'gift': {
-        const coinValue = msg.gift?.diamondCount || 0;
-        const repeatCount = msg.gift?.repeatCount || 1;
-        this.emit('gift', {
-          id: `gift_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-          username: msg.user?.uniqueId || 'unknown',
-          gift: { name: msg.gift?.name || 'Gift', coinValue, icon: '🎁' },
-          repeatCount,
-          totalCoinValue: msg.totalValue || coinValue * repeatCount,
-          timestamp: Date.now(),
-        });
-        break;
-      }
-
-      case 'like':
-        this.stats.likeCount = msg.totalLikes ?? this.stats.likeCount;
-        this.emit('like', {
-          username: msg.user?.uniqueId || 'unknown',
-          increment: msg.likeCount || 0,
-          totalLikeCount: this.stats.likeCount,
-        });
-        break;
-
-      case 'share':
-        this.stats.shareCount += 1;
-        this.emit('share', {
-          username: msg.user?.uniqueId || 'unknown',
-          totalShareCount: this.stats.shareCount,
-        });
-        break;
-
-      case 'member':
-      case 'roomUser':
-        if (typeof msg.viewerCount === 'number') {
-          this.stats.viewerCount = msg.viewerCount;
-          this.emit('viewerCount', { count: this.stats.viewerCount });
-        }
-        break;
-
-      default:
-        // event lain (follow, roomInfo, dll) — diamkan dulu, bisa dikembangkan nanti
-        break;
-    }
+    console.warn(
+      '⚠️  Mode "live" belum diaktifkan. Install `tiktok-live-connector` lalu ' +
+      'lengkapi implementasi di server/services/tiktokConnector.js (_connectRealTikTok). ' +
+      'Fallback ke mode simulasi untuk sekarang.'
+    );
+    return this._connectSimulation(uniqueId);
   }
 }
 
